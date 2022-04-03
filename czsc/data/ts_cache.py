@@ -53,7 +53,7 @@ class TsDataCache:
         """给每个tushare数据接口创建一个缓存路径"""
         cache_path = self.cache_path
         self.api_names = [
-            'ths_daily', 'ths_index', 'ths_member', 'pro_bar',
+            'daily', 'ths_daily', 'ths_index', 'ths_member', 'pro_bar',
             'hk_hold', 'cctv_news', 'daily_basic', 'index_weight',
             'adj_factor', 'pro_bar_minutes', 'limit_list', 'bak_basic',
 
@@ -352,6 +352,47 @@ class TsDataCache:
             df = pro.cctv_news(date=date)
             io.save_pkl(df, file_cache)
         return df
+
+    def daily(self, ts_code: str, start_date: str, end_date: str, raw_bar=True):
+        """A股日线行情
+
+        https://tushare.pro/document/2?doc_id=27
+        """
+        cache_path = self.api_path_map['daily']
+        file_cache = os.path.join(cache_path, f"daily_{ts_code}.pkl")
+
+        if os.path.exists(file_cache):
+            kline = io.read_pkl(file_cache)
+            if self.verbose:
+                print(f"daily: read cache {file_cache}")
+        else:
+            start_date_ = (pd.to_datetime(self.sdt) - timedelta(days=1000)).strftime('%Y%m%d')
+            kline = pro.daily(ts_code=ts_code, start_date=start_date_, end_date=self.edt)
+            kline = kline.sort_values('trade_date', ignore_index=True)
+            kline['trade_date'] = pd.to_datetime(kline['trade_date'], format=self.date_fmt)
+            kline['dt'] = kline['trade_date']
+            kline['avg_price'] = kline['amount'] / kline['vol']
+
+            for bar_number in (1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377):
+                # 向后看
+                n_col_name = 'n' + str(bar_number) + 'b'
+                kline[n_col_name] = (kline['close'].shift(-bar_number) / kline['close'] - 1) * 10000
+                kline[n_col_name] = kline[n_col_name].round(4)
+
+                # 向前看
+                b_col_name = 'b' + str(bar_number) + 'b'
+                kline[b_col_name] = (kline['close'] / kline['close'].shift(bar_number) - 1) * 10000
+                kline[b_col_name] = kline[b_col_name].round(4)
+
+            io.save_pkl(kline, file_cache)
+
+        start_date = pd.to_datetime(start_date)
+        end_date = pd.to_datetime(end_date)
+        bars = kline[(kline['trade_date'] >= start_date) & (kline['trade_date'] <= end_date)]
+        bars.reset_index(drop=True, inplace=True)
+        if raw_bar:
+            bars = format_kline(bars, freq=Freq.D)
+        return bars
 
     def daily_basic(self, ts_code: str, start_date: str, end_date: str):
         """每日指标
