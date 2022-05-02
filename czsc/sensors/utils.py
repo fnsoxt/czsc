@@ -187,7 +187,7 @@ def generate_signals(bars: List[RawBar],
         bg.update(bar)
 
     signals = []
-    ct = CzscAdvancedTrader(bg, get_signals, max_bi_count=max_bi_count, signals_n=signals_n)
+    ct = CzscAdvancedTrader(bg, get_signals, signals_n=signals_n)
     for bar in tqdm(bars_right, desc=f'generate signals of {bg.symbol}'):
         ct.update(bar)
         signals.append(dict(ct.s))
