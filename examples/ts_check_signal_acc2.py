@@ -18,15 +18,15 @@ from czsc.objects import Signal, Freq
 from czsc.sensors.utils import check_signals_acc
 
 os.environ['czsc_verbose'] = '1'
-dc = TsDataCache('.', sdt='2010-01-01', edt='20211209')
+dc = TsDataCache('.', sdt='2010-01-01', edt='20231230')
 symbol = '000858.SZ'
-bars = dc.daily(ts_code=symbol, start_date='20181101', end_date='20220402')
+bars = dc.daily(ts_code=symbol, start_date='20181101', end_date='20220502')
 
 def get_signals(cat: CzscAdvancedTrader) -> OrderedDict:
     s = OrderedDict({"symbol": cat.symbol, "dt": cat.end_dt, "close": cat.latest_price})
     for _, c in cat.kas.items():
         if c.freq == Freq.D:
-            s.update(signals.bxt.get_s_like_bs(c, di=1))
+            s.update(signals.bxt.get_s_like_bs(c, di=5))
     return s
 
 
