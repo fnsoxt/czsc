@@ -18,19 +18,8 @@ freq_map = {Freq.F1: "1min", Freq.F5: '5min', Freq.F15: "15min", Freq.F30: '30mi
             Freq.F60: "60min", Freq.D: 'D', Freq.W: "W", Freq.M: "M"}
 freq_cn_map = {"1分钟": Freq.F1, "5分钟": Freq.F5, "15分钟": Freq.F15, "30分钟": Freq.F30,
         "60分钟": Freq.F60, "日线": Freq.D, "周线": Freq.W, "月线": Freq.M}
-exchanges = {
-    "SSE": "上交所",
-    "SZSE": "深交所",
-    "CFFEX": "中金所",
-    "SHFE": "上期所",
-    "CZCE": "郑商所",
-    "DCE": "大商所",
-    "INE": "能源",
-    "IB": "银行间",
-    "XHKG": "港交所"
-}
 
-dt_fmt = "%Y-%m-%d %H:%M:%S"
+dt_fmt = "%Y%m%d%H%M%S%f"
 date_fmt = "%Y%m%d"
 
 try:
@@ -60,7 +49,7 @@ def format_kline(kline: pd.DataFrame, freq: Freq) -> List[RawBar]:
             amount = int(record.get('amount', 0))
 
         # 将每一根K线转换成 RawBar 对象
-        bar = RawBar(symbol=record['ts_code'], dt=pd.to_datetime(record[dt_key]),
+        bar = RawBar(symbol=record['bs_code'], dt=pd.to_datetime(record[dt_key]),
                      id=i, freq=freq, open=record['open'], close=record['close'],
                      high=record['high'], low=record['low'],
                      vol=vol,          # 成交量，单位：股

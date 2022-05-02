@@ -18,11 +18,11 @@ from czsc.objects import Signal, Freq
 from czsc.sensors.utils import check_signals_acc
 
 os.environ['czsc_verbose'] = '1'
-dc = BsDataCache('.', sdt='2010-01-01', edt='20231230')
+dc = BsDataCache('.', sdt='2010-01-01', edt='2023-12-30')
 symbol = 'sz.000858'
 bars = dc.query_minutes(bs_code=symbol, sdt='2018-11-01', edt='2022-05-02')
-print(bars)
-exit()
+# print(bars)
+# exit()
 
 def get_signals(cat: CzscAdvancedTrader) -> OrderedDict:
     s = OrderedDict({"symbol": cat.symbol, "dt": cat.end_dt, "close": cat.latest_price})

@@ -35,11 +35,11 @@ class BsDataCache:
         self.__prepare_api_path()
 
         self.freq_map = {
-            "1min": Freq.F1,
-            "5min": Freq.F5,
-            "15min": Freq.F15,
-            "30min": Freq.F30,
-            "60min": Freq.F60,
+            "1": Freq.F1,
+            "5": Freq.F5,
+            "15": Freq.F15,
+            "30": Freq.F30,
+            "60": Freq.F60,
             "D": Freq.D,
             "W": Freq.W,
             "M": Freq.M,
@@ -141,11 +141,11 @@ class BsDataCache:
             if self.verbose:
                 print(f"query_minutes: read cache {file_cache}")
         else:
-            klines = []
+            data_list = []
             end_dt = pd.to_datetime(self.edt)
             dt1 = pd.to_datetime(self.sdt)
 
-            file = "time,open,high,low,close,volume,amount,adjustflag"
+            file = "time,code,open,high,low,close,volume,amount,adjustflag"
             rs = bs.query_history_k_data_plus(bs_code,
                     file,
                     start_date=sdt, end_date=edt,
@@ -156,22 +156,16 @@ class BsDataCache:
                 print(rs.error_code, rs.error_msg)
             while (rs.error_code == '0') & rs.next():
                 # 获取一条记录，将记录合并在一起
-                klines.append(rs.get_row_data())
-                print(klines)
-                exit()
-
-            print(klines)
-            exit()
-
-            df_klines = pd.concat(klines, ignore_index=True)
-            kline = df_klines.drop_duplicates('trade_time')\
-                .sort_values('trade_time', ascending=True, ignore_index=True)
+                data_list.append(rs.get_row_data())
+            fields = ['trade_time', 'bs_code', 'open', 'high', 'low', 'close', 'vol', 'amount', 'adj']
+            kline = pd.DataFrame(data_list, columns=fields)
             kline['trade_time'] = pd.to_datetime(kline['trade_time'], format=dt_fmt)
             kline['dt'] = kline['trade_time']
             float_cols = ['open', 'close', 'high', 'low', 'vol', 'amount']
             kline[float_cols] = kline[float_cols].astype('float32')
             kline['avg_price'] = kline['amount'] / kline['vol']
-
+            # print(data_list)
+            # exit()
             # 删除9:30的K线
             kline['keep'] = kline['trade_time'].apply(lambda x: 0 if x.hour == 9 and x.minute == 30 else 1)
             kline = kline[kline['keep'] == 1]
