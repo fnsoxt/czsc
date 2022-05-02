@@ -4,6 +4,8 @@ author: zengbin93
 email: zeng_bin8888@163.com
 create_dt: 2021/11/21 17:48
 describe: 技术分析相关信号的计算
+
+ta-lib 安装包：https://www.lfd.uci.edu/~gohlke/pythonlibs/#ta-lib
 """
 import numpy as np
 from collections import OrderedDict
@@ -181,13 +183,14 @@ def get_s_sma(c: analyze.CZSC, di: int = 1, t_seq=(5, 10, 20, 60)) -> OrderedDic
         s[x1.key] = x1.value
         s[x2.key] = x2.value
 
-    if len(c.bars_raw) < 100:
+    n = max(t_seq) + 10
+    if len(c.bars_raw) < n:
         return s
 
     if di == 1:
-        close = np.array([x.close for x in c.bars_raw[-100:]])
+        close = np.array([x.close for x in c.bars_raw[-n:]])
     else:
-        close = np.array([x.close for x in c.bars_raw[-100-di+1:-di+1]])
+        close = np.array([x.close for x in c.bars_raw[-n-di+1:-di+1]])
 
     for t in t_seq:
         sma = SMA(close, timeperiod=t)

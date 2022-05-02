@@ -14,6 +14,7 @@ from collections import OrderedDict
 from .enum import Mark, Direction
 from .objects import BI, FX, RawBar, NewBar, Signal
 from .utils.echarts_plot import kline_pro
+from . import envs
 
 
 def remove_include(k1: NewBar, k2: NewBar, k3: RawBar):
@@ -87,13 +88,13 @@ def check_fxs(bars: List[NewBar]) -> List[FX]:
     return fxs
 
 
-def check_bi(bars: List[NewBar], bi_min_len: int = 7):
+def check_bi(bars: List[NewBar]):
     """输入一串无包含关系K线，查找其中的一笔
 
     :param bars: 无包含关系K线列表
-    :param bi_min_len: 一笔的最少无包含关系K线数量，7是老笔的要求
     :return:
     """
+    min_bi_len = envs.get_min_bi_len()
     fxs = check_fxs(bars)
     if len(fxs) < 2:
         return None, bars
@@ -133,36 +134,77 @@ def check_bi(bars: List[NewBar], bi_min_len: int = 7):
     # 判断fx_a和fx_b价格区间是否存在包含关系
     ab_include = (fx_a.high > fx_b.high and fx_a.low < fx_b.low) \
                  or (fx_a.high < fx_b.high and fx_a.low > fx_b.low)
-
-    if len(bars_a) >= bi_min_len and not ab_include:
+    if len(bars_a) >= min_bi_len and not ab_include:
         fxs_ = [x for x in fxs if fx_a.elements[0].dt <= x.dt <= fx_b.elements[2].dt]
         bi = BI(symbol=fx_a.symbol, fx_a=fx_a, fx_b=fx_b, fxs=fxs_, direction=direction, bars=bars_a)
-        return bi, bars_b
+
+        low_ubi = min([x.low for x in bars_b])
+        high_ubi = max([x.high for x in bars_b])
+        if (bi.direction == Direction.Up and high_ubi > bi.high) \
+                or (bi.direction == Direction.Down and low_ubi < bi.low):
+            return None, bars
+        else:
+            return bi, bars_b
     else:
         return None, bars
+
+
+def signals_counter(signals_list) -> OrderedDict:
+    """信号连续出现次数记录
+
+    :param signals_list: 存储的信号列表
+        数据样例：
+            signals_list = [
+                {"dt": '2020-01-01', "日线_倒1K_SMA5多空": "空头_任意_任意_0"},
+                {"dt": '2020-01-02', "日线_倒1K_SMA5多空": "多头_任意_任意_0"},
+                {"dt": '2020-01-03', "日线_倒1K_SMA5多空": "多头_任意_任意_0"},
+                {"dt": '2020-01-04', "日线_倒1K_SMA5多空": "多头_任意_任意_0"},
+                {"dt": '2020-01-05', "日线_倒1K_SMA5多空": "多头_任意_任意_0"},
+                {"dt": '2020-01-06', "日线_倒1K_SMA5多空": "多头_任意_任意_0"},
+            ]
+    :return: 信号连续次数
+    """
+    if not signals_list:
+        return OrderedDict()
+
+    signals = [Signal(f"{k}_{v}") for k, v in signals_list[-1].items()
+               if len(k.split("_")) == 3 and "连续次数" not in k]
+
+    s = OrderedDict()
+    for signal in signals:
+        k1 = signal.k1
+        k2 = f"{signal.k2}#{signal.k3}"
+        k3 = "连续次数"
+        seq = [signal.is_match(x) for x in signals_list]
+        assert seq[-1], "最后一个信号匹配结果必须为 True"
+
+        n = 0
+        for x in seq:
+            if x:
+                n += 1
+            else:
+                n = 0
+        assert n >= 1, "连续次数小于1，不合逻辑"
+
+        signal_c = Signal(k1=k1, k2=k2, k3=k3, v1=f"{n}次")
+        s[signal_c.key] = signal_c.value
+
+    return s
 
 
 class CZSC:
     def __init__(self,
                  bars: List[RawBar],
-                 max_bi_count: int = 50,
-                 bi_min_len: int = 7,
                  get_signals: Callable = None,
-                 signals_n: int = 0,
-                 verbose=False):
+                 signals_n: int = 0):
         """
 
         :param bars: K线数据
         :param get_signals: 自定义的信号计算函数
-        :param bi_min_len: 笔的最小长度，包括左右分型，默认值为 7，是缠论原文老笔定义的长度
         :param signals_n: 缓存n个历史时刻的信号，0 表示不缓存；缓存的数据，主要用于计算信号连续次数
-        :param max_bi_count: 最大保存的笔数量
-            默认值为 50，仅使用内置的信号和因子，不需要调整这个参数。
-            如果进行新的信号计算需要用到更多的笔，可以适当调大这个参数。
         """
-        self.verbose = verbose
-        self.max_bi_count = max_bi_count
-        self.bi_min_len = bi_min_len
+        self.verbose = envs.get_verbose()
+        self.max_bi_num = envs.get_max_bi_num()
         self.signals_n = signals_n
         self.bars_raw = []  # 原始K线序列
         self.bars_ubi = []  # 未完成笔的无包含K线序列
@@ -208,24 +250,17 @@ class CZSC:
         last_bi = self.bi_list[-1]
 
         # 如果上一笔被破坏，将上一笔的bars与bars_ubi进行合并
-        min_low_ubi = min([x.low for x in bars_ubi[2:]])
-        max_high_ubi = max([x.high for x in bars_ubi[2:]])
-
-        if last_bi.direction == Direction.Up and max_high_ubi > last_bi.high:
+        if (last_bi.direction == Direction.Up and bars_ubi[-1].high > last_bi.high) \
+                or (last_bi.direction == Direction.Down and bars_ubi[-1].low < last_bi.low):
             bars_ubi_a = last_bi.bars[:-1] + [x for x in bars_ubi if x.dt >= last_bi.bars[-1].dt]
             self.bi_list.pop(-1)
-
-        elif last_bi.direction == Direction.Down and min_low_ubi < last_bi.low:
-            bars_ubi_a = last_bi.bars[:-1] + [x for x in bars_ubi if x.dt >= last_bi.bars[-1].dt]
-            self.bi_list.pop(-1)
-
         else:
             bars_ubi_a = bars_ubi
 
-        if self.verbose and len(bars_ubi_a) > 300:
-            print(f"{self.symbol} - {self.freq} - {bars_ubi_a[-1].dt} 未完成笔延伸超长，延伸数量: {len(bars_ubi_a)}")
+        if self.verbose and len(bars_ubi_a) > 100:
+            print(f"czsc_update_bi: {self.symbol} - {self.freq} - {bars_ubi_a[-1].dt} 未完成笔延伸数量: {len(bars_ubi_a)}")
 
-        bi, bars_ubi_ = check_bi(bars_ubi_a, self.bi_min_len)
+        bi, bars_ubi_ = check_bi(bars_ubi_a)
         self.bars_ubi = bars_ubi_
         if isinstance(bi, BI):
             self.bi_list.append(bi)
@@ -263,7 +298,7 @@ class CZSC:
 
         # 更新笔
         self.__update_bi()
-        self.bi_list = self.bi_list[-self.max_bi_count:]
+        self.bi_list = self.bi_list[-self.max_bi_num:]
         if self.bi_list:
             sdt = self.bi_list[0].fx_a.elements[0].dt
             s_index = 0
@@ -278,7 +313,7 @@ class CZSC:
             if self.signals_n > 0:
                 self.signals_list.append(self.signals)
                 self.signals_list = self.signals_list[-self.signals_n:]
-                self.signals.update(self.get_signal_counter())
+                self.signals.update(signals_counter(self.signals_list))
         else:
             self.signals = OrderedDict()
 
@@ -309,36 +344,6 @@ class CZSC:
         chart = self.to_echarts(width, height)
         chart.render(file_html)
         webbrowser.open(file_html)
-
-    def get_signal_counter(self) -> OrderedDict:
-        """信号连续出现次数记录"""
-        if not self.signals or not self.signals_list:
-            return OrderedDict()
-
-        signals_list = self.signals_list
-        signals = [Signal(f"{k}_{v}") for k, v in self.signals.items()
-                   if len(k.split("_")) == 3 and "连续次数" not in k]
-
-        s = OrderedDict()
-        for signal in signals:
-            k1 = signal.k1
-            k2 = f"{signal.k2}#{signal.k3}"
-            k3 = "连续次数"
-            seq = [signal.is_match(x) for x in signals_list]
-            assert seq[-1], "最后一个信号匹配结果必须为 True"
-
-            n = 0
-            for x in seq:
-                if x:
-                    n += 1
-                else:
-                    n = 0
-            assert n >= 1, "连续次数小于1，不合逻辑"
-
-            signal_c = Signal(k1=k1, k2=k2, k3=k3, v1=f"{n}次")
-            s[signal_c.key] = signal_c.value
-
-        return s
 
     @property
     def last_bi_extend(self):

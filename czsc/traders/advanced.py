@@ -7,16 +7,17 @@ describe: 支持分批买入卖出的高级交易员
 """
 import os
 import webbrowser
+import pandas as pd
 from typing import Callable, List
-from collections import OrderedDict
 from pyecharts.charts import Tab
 from pyecharts.components import Table
 from pyecharts.options import ComponentTitleOpts
 
-from ..analyze import CZSC
-from ..objects import PositionLong, PositionShort, Operate, Signal, Event, RawBar
-from ..utils.bar_generator import BarGenerator
+from ..analyze import CZSC, signals_counter
+from ..objects import PositionLong, PositionShort, Operate, Event, RawBar
+from ..utils import BarGenerator, x_round
 from ..utils.cache import home_path
+from .. import envs
 
 
 class CzscAdvancedTrader:
@@ -29,38 +30,38 @@ class CzscAdvancedTrader:
                  long_pos: PositionLong = None,
                  short_events: List[Event] = None,
                  short_pos: PositionShort = None,
-                 max_bi_count: int = 50,
-                 bi_min_len: int = 7,
                  signals_n: int = 0,
-                 verbose: bool = False,
                  ):
         """
 
         :param bg: K线合成器
-        :param get_signals: 自定义的单级别信号计算函数
+        :param get_signals: 自定义信号计算函数
         :param long_events: 自定义的多头交易事件组合，推荐平仓事件放到前面
         :param long_pos: 多头仓位对象
         :param short_events: 自定义的空头交易事件组合，推荐平仓事件放到前面
         :param short_pos: 空头仓位对象
-        :param max_bi_count: 单个级别最大保存笔的数量
-        :param bi_min_len: 一笔最小无包含K线数量
-        :param signals_n: 见 `CZSC` 对象
-        :param verbose: 是否显示更多信息，默认为False
+        :param signals_n: 缓存n个历史时刻的信号，0 表示不缓存；缓存的数据，主要用于计算信号连续次数
         """
         self.name = "CzscAdvancedTrader"
         self.bg = bg
+        self.symbol = bg.symbol
         self.base_freq = bg.base_freq
         self.freqs = list(bg.bars.keys())
+        self.get_signals = get_signals
         self.long_events = long_events
         self.long_pos = long_pos
+        self.long_holds = []                    # 记录基础周期结束时间对应的多头仓位信息
         self.short_events = short_events
         self.short_pos = short_pos
-        self.verbose = verbose
-        self.kas = {freq: CZSC(b, max_bi_count=max_bi_count,
-                               get_signals=get_signals, signals_n=signals_n,
-                               bi_min_len=bi_min_len, verbose=verbose)
-                    for freq, b in bg.bars.items()}
-        self.s = self._cal_signals()
+        self.short_holds = []                   # 记录基础周期结束时间对应的空头仓位信息
+        self.signals_n = signals_n
+        self.signals_list = []
+        self.verbose = envs.get_verbose()
+        self.kas = {freq: CZSC(b) for freq, b in bg.bars.items()}
+
+        last_bar = self.kas[self.base_freq].bars_raw[-1]
+        self.end_dt, self.bid, self.latest_price = last_bar.dt, last_bar.id, last_bar.close
+        self.s = self.get_signals(self)
 
     def __repr__(self):
         return "<{} for {}>".format(self.name, self.symbol)
@@ -78,17 +79,23 @@ class CzscAdvancedTrader:
             chart = self.kas[freq].to_echarts(width, height)
             tab.add(chart, freq)
 
+        signals = {k: v for k, v in self.s.items() if len(k.split("_")) == 3}
         for freq in self.freqs:
+            freq_signals = {k: signals[k] for k in signals.keys() if k.startswith("{}_".format(freq))}
+            for k in freq_signals.keys():
+                signals.pop(k)
+            if len(freq_signals) <= 0:
+                continue
             t1 = Table()
-            t1.add(["名称", "数据"], [[k, v] for k, v in self.s.items() if k.startswith("{}_".format(freq))])
+            t1.add(["名称", "数据"], [[k, v] for k, v in freq_signals.items()])
             t1.set_global_opts(title_opts=ComponentTitleOpts(title="缠中说禅信号表", subtitle=""))
-            tab.add(t1, "{}信号表".format(freq))
+            tab.add(t1, f"{freq}信号")
 
-        t2 = Table()
-        ths_ = [["同花顺F10",  "http://basic.10jqka.com.cn/{}".format(self.symbol[:6])]]
-        t2.add(["名称", "数据"], [[k, v] for k, v in self.s.items() if "_" not in k] + ths_)
-        t2.set_global_opts(title_opts=ComponentTitleOpts(title="缠中说禅因子表", subtitle=""))
-        tab.add(t2, "因子表")
+        if len(signals) > 0:
+            t1 = Table()
+            t1.add(["名称", "数据"], [[k, v] for k, v in signals.items()])
+            t1.set_global_opts(title_opts=ComponentTitleOpts(title="缠中说禅信号表", subtitle=""))
+            tab.add(t1, "其他信号")
 
         if file_html:
             tab.render(file_html)
@@ -101,188 +108,23 @@ class CzscAdvancedTrader:
         self.take_snapshot(file_html, width, height)
         webbrowser.open(file_html)
 
-    def get_s_position(self, pos: [PositionLong, PositionShort]):
-        """计算多头持仓信号
-
-        :return:
-        """
-        if isinstance(pos, PositionLong):
-            k1 = "多头"
-        elif isinstance(pos, PositionShort):
-            k1 = "空头"
-        else:
-            raise ValueError
-
-        s = OrderedDict()
-        default_signals = [
-            Signal(k1=k1, k2="最大", k3='盈利', v1="其他", v2="其他", v3="其他"),
-            Signal(k1=k1, k2="最大", k3='回撤', v1="其他", v2="其他", v3="其他"),
-            Signal(k1=k1, k2="最大", k3='回撤盈利比', v1="其他", v2="其他", v3="其他"),
-
-            Signal(k1=k1, k2="累计", k3='盈亏', v1="其他", v2="其他", v3="其他"),
-            Signal(k1=k1, k2="持仓", k3='时间', v1="其他", v2="其他", v3="其他"),
-            Signal(k1=k1, k2="持仓", k3='基础K线数量', v1="其他", v2="其他", v3="其他"),
-        ]
-        for signal_ in default_signals:
-            s[signal_.key] = signal_.value
-
-        if pos.pos == 0:
-            return s
-
-        base_freq = self.base_freq
-        latest_price = self.latest_price
-        bid = self.bg.bars[base_freq][-1].id
-        end_dt = self.bg.bars[base_freq][-1].dt
-
-        if isinstance(pos, PositionLong):
-            last_o = [x for x in pos.operates[-50:] if x['op'] == Operate.LO][-1]
-            last_o_price = last_o['price']
-            yl = pos.long_high / last_o_price - 1                   # 最大盈利
-            hc = abs(latest_price / pos.long_high - 1)              # 最大回撤
-            yk = (latest_price - last_o_price) / last_o_price       # 累计盈亏
-        else:
-            last_o = [x for x in pos.operates[-50:] if x['op'] == Operate.SO][-1]
-            last_o_price = last_o['price']
-            yl = last_o_price / pos.short_low - 1                   # 最大盈利
-            hc = abs(pos.short_low / latest_price - 1)              # 最大回撤
-            yk = (last_o_price - latest_price) / last_o_price       # 累计盈亏
-
-        last_o_dt = last_o['dt']
-        last_o_bid = last_o['bid']
-
-        hc_yl_rate = hc / (yl + 0.000001)                   # 最大回撤盈利比
-        hold_time = (end_dt - last_o_dt).total_seconds()   # 持仓时间，单位：秒
-        hold_nbar = bid - last_o_bid                       # 持仓基础K线数量
-        assert yl >= 0 and hc >= 0 and hc_yl_rate >= 0
-
-        # ----------------------------------------------------------------------------------
-        if yl > 0.15:
-            v1 = "超过1500BP"
-        elif yl > 0.1:
-            v1 = "超过1000BP"
-        elif yl > 0.08:
-            v1 = "超过800BP"
-        elif yl > 0.05:
-            v1 = "超过500BP"
-        elif yl > 0.03:
-            v1 = "超过300BP"
-        else:
-            v1 = "低于300BP"
-        v = Signal(k1=k1, k2="最大", k3='盈利', v1=v1)
-        s[v.key] = v.value
-
-        # ----------------------------------------------------------------------------------
-        if hc > 0.15:
-            v1 = "超过1500BP"
-        elif hc > 0.1:
-            v1 = "超过1000BP"
-        elif hc > 0.08:
-            v1 = "超过800BP"
-        elif hc > 0.05:
-            v1 = "超过500BP"
-        elif hc > 0.03:
-            v1 = "超过300BP"
-        else:
-            v1 = "低于300BP"
-        v = Signal(k1=k1, k2="最大", k3='回撤', v1=v1)
-        s[v.key] = v.value
-
-        # ----------------------------------------------------------------------------------
-        if hc_yl_rate > 0.8:
-            v1 = "大于08"
-        elif hc_yl_rate > 0.6:
-            v1 = "大于06"
-        elif hc_yl_rate > 0.5:
-            v1 = "大于05"
-        elif hc_yl_rate > 0.3:
-            v1 = "大于03"
-        else:
-            v1 = "小于03"
-        v = Signal(k1=k1, k2="最大", k3='回撤盈利比', v1=v1)
-        s[v.key] = v.value
-
-        # ----------------------------------------------------------------------------------
-        if yk >= 0:
-            v1 = "盈利"
-        else:
-            v1 = "亏损"
-
-        if abs(yk) > 0.15:
-            v2 = "超过1500BP"
-        elif abs(yk) > 0.1:
-            v2 = "超过1000BP"
-        elif abs(yk) > 0.08:
-            v2 = "超过800BP"
-        elif abs(yk) > 0.05:
-            v2 = "超过500BP"
-        elif abs(yk) > 0.03:
-            v2 = "超过300BP"
-        else:
-            v2 = "低于300BP"
-        v = Signal(k1=k1, k2="累计", k3='盈亏', v1=v1, v2=v2)
-        s[v.key] = v.value
-
-        # ----------------------------------------------------------------------------------
-        if hold_time > 3600 * 24 * 13:
-            v1 = "超过13天"
-        elif hold_time > 3600 * 24 * 8:
-            v1 = "超过8天"
-        elif hold_time > 3600 * 24 * 5:
-            v1 = "超过5天"
-        elif hold_time > 3600 * 24 * 3:
-            v1 = "超过3天"
-        else:
-            v1 = "低于3天"
-        v = Signal(k1=k1, k2="持仓", k3='时间', v1=v1)
-        s[v.key] = v.value
-
-        # ----------------------------------------------------------------------------------
-        if hold_nbar > 300:
-            v1 = "超过300根"
-        elif hold_nbar > 200:
-            v1 = "超过200根"
-        elif hold_nbar > 150:
-            v1 = "超过150根"
-        elif hold_nbar > 100:
-            v1 = "超过100根"
-        elif hold_nbar > 50:
-            v1 = "超过50根"
-        else:
-            v1 = "低于50根"
-        v = Signal(k1=k1, k2="持仓", k3='基础K线数量', v1=v1)
-        s[v.key] = v.value
-
-        return s
-
-    def _cal_signals(self):
-        """计算信号"""
-        base_freq = self.base_freq
-        self.symbol = self.kas[base_freq].symbol
-        self.end_dt = self.kas[base_freq].bars_raw[-1].dt
-        self.bid = self.kas[base_freq].bars_raw[-1].id
-        self.latest_price = self.kas[base_freq].bars_raw[-1].close
-
-        s = OrderedDict()
-        for freq, ks in self.kas.items():
-            s.update(ks.signals)
-
-        s.update(self.kas[base_freq].bars_raw[-1].__dict__)
-        if self.long_pos:
-            s.update(self.get_s_position(self.long_pos))
-        if self.short_pos:
-            s.update(self.get_s_position(self.short_pos))
-        return s
-
     def update(self, bar: RawBar):
         """输入基础周期已完成K线，更新信号，更新仓位"""
         self.bg.update(bar)
         for freq, b in self.bg.bars.items():
             self.kas[freq].update(b[-1])
-        self.s = self._cal_signals()
-        dt = self.end_dt
-        price = self.latest_price
-        bid = self.bid
 
+        self.symbol = symbol = bar.symbol
+        last_bar = self.kas[self.base_freq].bars_raw[-1]
+        self.end_dt, self.bid, self.latest_price = last_bar.dt, last_bar.id, last_bar.close
+        dt, bid, price = self.end_dt, self.bid, self.latest_price
+        self.s = self.get_signals(self)
+        if self.signals_n > 0:
+            self.signals_list.append(self.s)
+            self.signals_list = self.signals_list[-self.signals_n:]
+            self.s.update(signals_counter(self.signals_list))
+
+        last_n1b = last_bar.close / self.kas[self.base_freq].bars_raw[-2].close - 1
         # 遍历 long_events，更新 long_pos
         if self.long_events:
             assert isinstance(self.long_pos, PositionLong), "long_events 必须配合 PositionLong 使用"
@@ -298,6 +140,9 @@ class CzscAdvancedTrader:
                     break
 
             self.long_pos.update(dt, op, price, bid, op_desc)
+            if self.long_holds:
+                self.long_holds[-1]['n1b'] = last_n1b
+            self.long_holds.append({'dt': dt, 'symbol': symbol, 'long_pos': self.long_pos.pos, 'n1b': 0})
 
         # 遍历 short_events，更新 short_pos
         if self.short_events:
@@ -314,5 +159,51 @@ class CzscAdvancedTrader:
                     break
 
             self.short_pos.update(dt, op, price, bid, op_desc)
+            if self.short_holds:
+                self.short_holds[-1]['n1b'] = -last_n1b
+            self.short_holds.append({'dt': dt, 'symbol': symbol, 'short_pos': self.short_pos.pos, 'n1b': 0})
 
+    @property
+    def results(self):
+        """汇集回测相关结果"""
+        res = {}
+        ct = self
+        dt_fmt = "%Y-%m-%d %H:%M"
+        if ct.long_pos:
+            df_holds = pd.DataFrame(ct.long_holds)
+
+            p = {"开始时间": df_holds['dt'].min().strftime(dt_fmt),
+                 "结束时间": df_holds['dt'].max().strftime(dt_fmt),
+                 "基准收益": x_round(df_holds['n1b'].sum(), 4),
+                 "覆盖率": x_round(df_holds['long_pos'].mean(), 4)}
+
+            df_holds['持仓收益'] = df_holds['long_pos'] * df_holds['n1b']
+            df_holds['累计基准'] = df_holds['n1b'].cumsum()
+            df_holds['累计收益'] = df_holds['持仓收益'].cumsum()
+
+            res['long_holds'] = df_holds
+            res['long_operates'] = ct.long_pos.operates
+            res['long_pairs'] = ct.long_pos.pairs
+            res['long_performance'] = ct.long_pos.evaluate_operates()
+            res['long_performance'].update(dict(p))
+
+        if ct.short_pos:
+            df_holds = pd.DataFrame(ct.short_holds)
+
+            p = {"开始时间": df_holds['dt'].min().strftime(dt_fmt),
+                 "结束时间": df_holds['dt'].max().strftime(dt_fmt),
+                 "基准收益": x_round(df_holds['n1b'].sum(), 4),
+                 "覆盖率": x_round(df_holds['short_pos'].mean(), 4)}
+
+            df_holds['持仓收益'] = df_holds['short_pos'] * df_holds['n1b']
+            df_holds['累计基准'] = df_holds['n1b'].cumsum()
+            df_holds['累计收益'] = df_holds['持仓收益'].cumsum()
+
+            res['short_holds'] = df_holds
+            res['short_operates'] = ct.short_pos.operates
+            res['short_pairs'] = ct.short_pos.pairs
+            res['short_performance'] = ct.short_pos.evaluate_operates()
+            res['short_performance'].update(dict(p))
+
+        return res
 
