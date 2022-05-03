@@ -18,6 +18,7 @@ from czsc.objects import Signal, Freq
 from czsc.sensors.utils import check_signals_acc
 
 os.environ['czsc_verbose'] = '1'
+os.environ['czsc_min_bi_len'] = "6"     # 通过环境变量设定最小笔长度，6 对应新笔定义，7 对应老笔定义
 dc = BsDataCache('.', sdt='2010-01-01', edt='2023-12-30')
 
 def get_signals(cat: CzscAdvancedTrader) -> OrderedDict:
