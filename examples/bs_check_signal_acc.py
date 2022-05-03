@@ -47,7 +47,7 @@ if __name__ == '__main__':
     '''
     # 国芳集团
     symbol = 'sh.601086'
-    bars = dc.query_minutes(bs_code=symbol, freq="5", sdt='2021-04-01', edt='2022-05-02')
+    bars = dc.query_minutes(bs_code=symbol, freq="5", sdt='2022-04-01', edt='2022-05-02')
     # print(bars)
     # exit()
     check_signals_acc(bars, get_signals=get_f5_signals)
