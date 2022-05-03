@@ -25,9 +25,9 @@ symbol = 'sh.601086'
 freq="5"
 sdt='2021-04-01'
 edt='2022-05-02'
+
 dc = BsDataCache('.', sdt='2010-01-01', edt='2023-12-30')
 bars = dc.query_minutes(bs_code=symbol, freq=freq, sdt=sdt, edt=edt)
-
 c = CZSC(bars)
 home_path = os.path.expanduser("~")
 file_html = os.path.join(home_path, "temp_czsc.html")
