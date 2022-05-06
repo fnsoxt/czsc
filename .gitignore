@@ -114,3 +114,4 @@ venv.bak/
 # ts cache
 /TS_CACHE_*
 /BS_CACHE_*
+/TDX_CACHE_*

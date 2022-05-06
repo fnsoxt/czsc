@@ -142,9 +142,6 @@ class BsDataCache:
                 print(f"query_minutes: read cache {file_cache}")
         else:
             data_list = []
-            end_dt = pd.to_datetime(self.edt)
-            dt1 = pd.to_datetime(self.sdt)
-
             file = "time,code,open,high,low,close,volume,amount,adjustflag"
             rs = bs.query_history_k_data_plus(bs_code,
                     file,
